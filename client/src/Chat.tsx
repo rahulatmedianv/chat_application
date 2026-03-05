@@ -39,6 +39,11 @@ export function Chat({ currentUser, onLogout }: ChatProps) {
       console.log("Socket disconnected");
     });
 
+    socket.on('chat:history', (history) => {
+      setMessages(history);
+      console.log({ history });
+    })
+
     socket.on("chat", (newMessage: Message) => {
       console.log("New message added", newMessage);
       setMessages((previousMessages) => [...previousMessages, newMessage]);
@@ -83,28 +88,24 @@ export function Chat({ currentUser, onLogout }: ChatProps) {
         {messages.map((message, idx) => (
           <div
             key={idx}
-            className={`mt-[0.4em] block w-1/2 text-[0.91em] ${
-              currentUser === message.author ? "ml-auto" : ""
-            }`}
+            className={`mt-[0.4em] block w-1/2 text-[0.91em] ${currentUser === message.author ? "ml-auto" : ""
+              }`}
           >
             <div
-              className={`flex flex-row items-center  ${
-                currentUser === message.author ? "  justify-end" : "gap-2"
-              }`}
+              className={`flex flex-row items-center  ${currentUser === message.author ? "  justify-end" : "gap-2"
+                }`}
             >
               <span
-                className={`text-[0.81em] font-semibold  ${
-                  currentUser === message.author ? "hidden" : ""
-                }`}
+                className={`text-[0.81em] font-semibold  ${currentUser === message.author ? "hidden" : ""
+                  }`}
               >
                 {message.author}
               </span>
               <div
-                className={`w-fit px-[0.9em] py-[0.6em] ${
-                  currentUser === message.author
+                className={`w-fit px-[0.9em] py-[0.6em] ${currentUser === message.author
                     ? "rounded-[0.7em_0_0_0.7em] bg-[#6bb9f2]"
                     : "rounded-[0_0.7em_0.7em_0] bg-[#c6e3fa]"
-                }`}
+                  }`}
               >
                 <span className="break-words whitespace-pre-wrap py-[0.6em]">
                   {message.body}
