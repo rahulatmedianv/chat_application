@@ -5,166 +5,272 @@ import UsersList from "./UsersList";
 type ChatProps = {
   readonly currentUser: string;
   readonly onLogout: () => void;
+  readonly chatWith?: string;
+  readonly handleChatUser: (user: string) => void;
 };
 
-interface User {
+type PresenceUser = {
   readonly id: string;
   readonly active: boolean;
   readonly name: string;
-}
+};
 
-interface ActiveUsers {
-  readonly users: Record<string, User>;
+type ActiveUsers = {
+  readonly users: Record<string, PresenceUser>;
   readonly count: number;
-}
+};
 
 type Message = {
-  readonly id?: number;
+  readonly id?: string;
   readonly body: string;
   readonly author: string;
+  readonly receiver?: string;
+  readonly createdAt?: string;
 };
 
-const systemMessage: Message = {
-  id: 1,
-  body: "Welcome to the Nest chat app",
-  author: "Bot",
-};
+const socket = io(import.meta.env.VITE_BACKEND_URL, { autoConnect: false });
 
-const socket = io(import.meta.env.VITE_BACKEND_URL, {
-  autoConnect: false,
-});
-// const socket = io("https://cj2k8290-4000.inc1.devtunnels.ms/", {
-//   autoConnect: false,
-// });
-
-export function Chat({ currentUser, onLogout }: ChatProps) {
+export function Chat({
+  currentUser,
+  onLogout,
+  chatWith = "global",
+  handleChatUser,
+}: ChatProps) {
   const [inputValue, setInputValue] = useState<string>("");
-  const [messages, setMessages] = useState<Message[]>([systemMessage]);
+  const [messages, setMessages] = useState<Message[]>([]);
   const [activeUsers, setActiveUsers] = useState<ActiveUsers>({
     users: {},
     count: 0,
   });
+  const activeUserNames: string[] = getActiveUserNames(
+    activeUsers,
+    currentUser,
+  );
   const inactiveUsers: string[] = getInactiveUserNames(
     activeUsers,
     currentUser,
   );
 
   useEffect(() => {
+    const executeRegisterPresence = (): void => {
+      socket.emit("presence:register", { currentUser });
+    };
+    const executeUpdatePresence = (snapshot: ActiveUsers): void => {
+      setActiveUsers(snapshot);
+    };
     socket.connect();
-    socket.emit("presence:register", { currentUser });
-    socket.on("presence:update", (activeUsr: ActiveUsers) => {
-      console.log({ activeUsr });
-      setActiveUsers(activeUsr);
-    });
-    socket.on("disconnect", () => {
-      console.log("Socket disconnected");
-    });
-
-    socket.on("chat:history", (history) => {
-      setMessages(history);
-      console.log({ history });
-    });
-
-    socket.on("chat", (newMessage: Message) => {
-      console.log("New message added", newMessage);
-      setMessages((previousMessages) => [...previousMessages, newMessage]);
-    });
-
+    socket.on("connect", executeRegisterPresence);
+    socket.on("presence:update", executeUpdatePresence);
+    executeRegisterPresence();
     return () => {
-      socket.off("connect");
-      socket.off("disconnect");
-      socket.off("chat");
-      socket.off("presence:update");
-      socket.off("chat:history");
+      socket.off("connect", executeRegisterPresence);
+      socket.off("presence:update", executeUpdatePresence);
     };
   }, [currentUser]);
 
-  const handleSendMessage = (
+  useEffect(() => {
+    if (chatWith === "global") {
+      const executeSetGlobalHistory = (history: Message[]): void => {
+        setMessages(history);
+      };
+      const executeAppendGlobalMessage = (newMessage: Message): void => {
+        setMessages((previousMessages) => [...previousMessages, newMessage]);
+      };
+      socket.emit("chat:history:request");
+      socket.on("chat:history:response", executeSetGlobalHistory);
+      socket.on("chat", executeAppendGlobalMessage);
+      return () => {
+        socket.off("chat:history:response", executeSetGlobalHistory);
+        socket.off("chat", executeAppendGlobalMessage);
+      };
+    }
+    const executeSetDmHistory = (history: Message[]): void => {
+      setMessages(history);
+    };
+    const executeAppendDmMessage = (newMessage: Message): void => {
+      const isCurrentConversation: boolean = isMessageInConversation({
+        message: newMessage,
+        currentUser,
+        chatWith,
+      });
+      if (!isCurrentConversation) {
+        return;
+      }
+      setMessages((previousMessages) => [...previousMessages, newMessage]);
+    };
+    socket.emit("dm:history:request", {
+      senderName: currentUser,
+      receiverName: chatWith,
+    });
+    socket.on("dm:history:response", executeSetDmHistory);
+    socket.on("dm:new", executeAppendDmMessage);
+    return () => {
+      socket.off("dm:history:response", executeSetDmHistory);
+      socket.off("dm:new", executeAppendDmMessage);
+    };
+  }, [currentUser, chatWith]);
+
+  const executeSendMessage = (
     e: React.KeyboardEvent<HTMLInputElement>,
   ): void => {
-    if (e.key !== "Enter" || inputValue.trim().length === 0) return;
-    console.log("message sent");
-    socket.emit("chat", { author: currentUser, body: inputValue.trim() });
+    if (e.key !== "Enter") {
+      return;
+    }
+    const nextMessage: string = inputValue.trim();
+    if (nextMessage.length === 0) {
+      return;
+    }
+    if (chatWith === "global") {
+      socket.emit("chat", { author: currentUser, body: nextMessage });
+    } else {
+      socket.emit("dm:send", {
+        senderName: currentUser,
+        receiverName: chatWith,
+        message: nextMessage,
+      });
+    }
     setInputValue("");
   };
 
-  const handleLogout = () => {
+  const executeLogout = (): void => {
     socket.disconnect();
     onLogout();
   };
 
   return (
-    <div className="flex h-screen w-4/5 flex-col border-x border-[#d1dbe3] bg-red-200">
-      <div className="flex items-center justify-between border-b border-[#d1dbe3] bg-[#f6fbff] px-[0.9em] py-[0.9em] text-base">
-        <span className="font-bold text-black/90">{currentUser}</span>
-        <span className="font-bold text-black/90">
-          Active User: {activeUsers.count}
+    <div className="flex h-screen w-full max-w-[1200px] flex-col overflow-hidden rounded-xl border border-slate-200 bg-slate-100 shadow-xl">
+      <div className="flex items-center justify-between border-b border-slate-200 bg-white px-4 py-3">
+        <div className="flex items-center gap-3">
+          <svg
+            viewBox="0 0 24 24"
+            className="h-7 w-7 text-blue-500"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+          >
+            <path d="M4 6h16a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H9l-5 4V8a2 2 0 0 1 2-2Z" />
+          </svg>
+          <div className="flex flex-col">
+            <span className="text-sm font-semibold text-slate-700">
+              Signed in as {currentUser}
+            </span>
+            <span className="text-xs text-slate-500">
+              {chatWith === "global"
+                ? "Global room"
+                : `Direct chat with ${chatWith}`}
+            </span>
+          </div>
+        </div>
+        <span className="rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-700">
+          {activeUsers.count} active
         </span>
         <button
-          className="cursor-pointer rounded bg-[#007bff] px-2 py-[0.35rem] text-base text-white"
-          onClick={handleLogout}
+          className="rounded-md bg-blue-500 px-3 py-1.5 text-sm font-medium text-white transition hover:bg-blue-600"
+          onClick={executeLogout}
         >
           Logout
         </button>
       </div>
       <div className="flex min-h-0 flex-1">
-        <div className="flex min-h-0 flex-1 flex-col">
-          <div className="flex min-h-0 flex-1 flex-col overflow-auto bg-white px-2 py-3 text-black/90">
-            {messages.map((message, idx) => (
-              <div
-                key={idx}
-                className={`mt-[0.4em] block w-1/2 text-[0.91em] ${
-                  currentUser === message.author ? "ml-auto" : ""
-                }`}
-              >
+        <div className="flex min-h-0 flex-1 flex-col bg-white">
+          <div className="flex min-h-0 flex-1 flex-col overflow-auto px-4 py-3">
+            {messages.length === 0 ? (
+              <div className="flex h-full flex-col items-center justify-center gap-3 text-slate-500">
+                <svg viewBox="0 0 64 64" className="h-20 w-20" fill="none">
+                  <circle cx="32" cy="32" r="30" fill="#eff6ff" />
+                  <path
+                    d="M20 24h24a4 4 0 0 1 4 4v12a4 4 0 0 1-4 4H30l-10 8V28a4 4 0 0 1 4-4Z"
+                    fill="#bfdbfe"
+                  />
+                </svg>
+                <span className="text-sm font-medium">No messages yet</span>
+              </div>
+            ) : (
+              messages.map((message) => (
                 <div
-                  className={`flex flex-row items-center ${
-                    currentUser === message.author ? "justify-end" : "gap-2"
+                  key={message.id ?? `${message.author}-${message.body}`}
+                  className={`mt-2 flex w-full text-sm ${
+                    currentUser === message.author
+                      ? "justify-end"
+                      : "justify-start"
                   }`}
                 >
-                  <span
-                    className={`text-[0.81em] font-semibold ${
-                      currentUser === message.author ? "hidden" : ""
-                    }`}
-                  >
-                    {message.author}
-                  </span>
-                  <div
-                    className={`w-fit px-[0.9em] py-[0.6em] ${
-                      currentUser === message.author
-                        ? "rounded-[0.7em_0_0_0.7em] bg-[#6bb9f2]"
-                        : "rounded-[0_0.7em_0.7em_0] bg-[#c6e3fa]"
-                    }`}
-                  >
-                    <span className="break-words whitespace-pre-wrap py-[0.6em]">
-                      {message.body}
+                  <div className="max-w-[60%]">
+                    <span
+                      className={`mb-1 block text-xs font-semibold text-slate-500 ${
+                        currentUser === message.author
+                          ? "text-right"
+                          : "text-left"
+                      }`}
+                    >
+                      {message.author}
                     </span>
+                    <div
+                      className={`rounded-2xl px-4 py-2 ${
+                        currentUser === message.author
+                          ? "rounded-tr-sm bg-blue-500 text-white"
+                          : "rounded-tl-sm bg-blue-100 text-slate-700"
+                      }`}
+                    >
+                      <span className="break-words whitespace-pre-wrap">
+                        {message.body}
+                      </span>
+                    </div>
                   </div>
                 </div>
-              </div>
-            ))}
+              ))
+            )}
           </div>
-          <div className="flex border-t border-[#d1dbe3] p-2">
+          <div className="flex border-t border-slate-200 bg-white p-3">
             <input
-              className="w-full rounded-[0.7em] border-0 bg-[#c6e3fa] px-[0.9em] py-[0.8em] text-[15px] text-black/90 focus:outline-none"
-              placeholder="Type message here"
+              className="w-full rounded-lg border border-slate-300 bg-slate-50 px-3 py-2 text-sm text-slate-700 outline-none transition focus:border-blue-500 focus:bg-white"
+              placeholder={
+                chatWith === "global"
+                  ? "Send a message to global chat"
+                  : `Send a direct message to ${chatWith}`
+              }
               value={inputValue}
               onChange={(e) => setInputValue(e.target.value)}
-              onKeyDown={handleSendMessage}
+              onKeyDown={executeSendMessage}
             />
           </div>
         </div>
         <UsersList
           inactiveUsers={inactiveUsers}
-          activeUsers={Object.entries(activeUsers.users)
-            .filter(
-              ([username, user]) => user.active && currentUser !== username,
-            )
-            .map(([username]) => username)}
+          activeUsers={activeUserNames}
+          handleChatUser={handleChatUser}
         />
       </div>
     </div>
   );
+}
+
+type MessageConversationMatcher = {
+  readonly message: Message;
+  readonly currentUser: string;
+  readonly chatWith: string;
+};
+
+function isMessageInConversation({
+  message,
+  currentUser,
+  chatWith,
+}: MessageConversationMatcher): boolean {
+  const isOutgoingMessage: boolean =
+    message.author === currentUser && message.receiver === chatWith;
+  const isIncomingMessage: boolean =
+    message.author === chatWith && message.receiver === currentUser;
+  return isOutgoingMessage || isIncomingMessage;
+}
+
+function getActiveUserNames(
+  activeUsers: ActiveUsers,
+  currentUser: string,
+): string[] {
+  return Object.entries(activeUsers.users)
+    .filter(([userName, user]) => user.active && userName !== currentUser)
+    .map(([userName]) => userName)
+    .sort((firstName, secondName) => firstName.localeCompare(secondName));
 }
 
 function getInactiveUserNames(
@@ -172,9 +278,7 @@ function getInactiveUserNames(
   currentUser: string,
 ): string[] {
   return Object.entries(activeUsers.users)
-    .filter(([username, user]) => {
-      return !user.active && username !== currentUser;
-    })
-    .map(([username]) => username)
-    .sort();
+    .filter(([userName, user]) => !user.active && userName !== currentUser)
+    .map(([userName]) => userName)
+    .sort((firstName, secondName) => firstName.localeCompare(secondName));
 }
