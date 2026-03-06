@@ -10,7 +10,7 @@ function App() {
       {currentUser ? (
         <Chat currentUser={currentUser} onLogout={() => setCurrentUser(null)} />
       ) : (
-        <Login onLogin={setCurrentUser} />
+        <Login onLogin={(user: string) => setCurrentUser(user)} />
       )}
     </div>
   );
